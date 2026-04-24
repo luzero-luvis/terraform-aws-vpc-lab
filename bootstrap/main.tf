@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.10"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -17,9 +17,7 @@ provider "aws" {
 data "aws_caller_identity" "current" {}
 
 locals {
-  # Bucket name is account-scoped so it's globally unique without random suffixes.
   bucket_name = "${data.aws_caller_identity.current.account_id}-network-lab-tfstate"
-  table_name  = "network-lab-terraform-locks"
 }
 
 # ── S3 bucket ─────────────────────────────────────────────────────────────────
@@ -62,7 +60,6 @@ resource "aws_s3_bucket_public_access_block" "tfstate" {
   restrict_public_buckets = true
 }
 
-# Prevent accidental deletion of the bucket that holds all your state.
 resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
   bucket = aws_s3_bucket.tfstate.id
 
@@ -73,25 +70,5 @@ resource "aws_s3_bucket_lifecycle_configuration" "tfstate" {
     noncurrent_version_expiration {
       noncurrent_days = 90
     }
-  }
-}
-
-# ── DynamoDB table (state locking) ────────────────────────────────────────────
-
-resource "aws_dynamodb_table" "tfstate_lock" {
-  name         = local.table_name
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  tags = {
-    Name      = local.table_name
-    Purpose   = "terraform-state-lock"
-    Project   = "network-lab"
-    ManagedBy = "terraform-bootstrap"
   }
 }

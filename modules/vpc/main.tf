@@ -4,4 +4,8 @@ resource "aws_vpc" "this" {
   enable_dns_support   = true
 
   tags = merge(var.tags, { Name = var.name })
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }

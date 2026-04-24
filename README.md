@@ -117,7 +117,7 @@ flowchart TB
 flowchart LR
     Dev(["👨‍💻 Developer"])
     TF["terraform apply"]
-    Lock["DynamoDB\nstate lock"]
+    Lock["S3 .tflock file\nuse_lockfile = true"]
     S3["S3 Bucket\nterraform.tfstate"]
     AWS["☁️ AWS Resources"]
 
@@ -129,7 +129,7 @@ flowchart LR
     TF -->|"5. release lock"| Lock
 ```
 
-> If two people run `terraform apply` at the same time, DynamoDB blocks the second one until the first finishes.
+> If two people run `terraform apply` at the same time, S3 native locking blocks the second one until the first finishes.
 
 ---
 
@@ -139,14 +139,14 @@ flowchart LR
 terraform-aws-vpc-lab/
 |
 +-- [versions.tf]
-|      required_version = ">= 1.6"
+|      required_version = ">= 1.10"
 |      aws provider ~> 5.0
 |      backend "s3" {
-|        bucket         = "ACCOUNT_ID-network-lab-tfstate"
-|        key            = "network-lab/terraform.tfstate"
-|        region         = "ap-south-1"
-|        dynamodb_table = "network-lab-terraform-locks"
-|        encrypt        = true
+|        bucket       = "ACCOUNT_ID-network-lab-tfstate"
+|        key          = "network-lab/terraform.tfstate"
+|        region       = "ap-south-1"
+|        encrypt      = true
+|        use_lockfile = true
 |      }
 |
 +-- [variables.tf]
@@ -200,9 +200,7 @@ terraform-aws-vpc-lab/
 |        encryption:  AES256
 |        public_access: fully blocked
 |        lifecycle:   expire noncurrent versions after 90 days
-|      aws_dynamodb_table         "network-lab-terraform-locks"
-|        billing_mode: PAY_PER_REQUEST
-|        hash_key:     LockID (String)
+|      locking: use_lockfile = true (S3 native — no DynamoDB needed)
 |
 +-- modules/
        |
@@ -406,7 +404,7 @@ terraform-aws-vpc-lab/
 cd bootstrap/
 terraform init
 terraform apply
-# outputs: bucket name and table name to paste into versions.tf
+# outputs: bucket name to paste into versions.tf
 ```
 
 ### Step 2 — configure the backend
@@ -415,11 +413,11 @@ Edit `versions.tf` and replace `ACCOUNT_ID` with your actual AWS account ID from
 
 ```hcl
 backend "s3" {
-  bucket         = "123456789012-network-lab-tfstate"
-  key            = "network-lab/terraform.tfstate"
-  region         = "ap-south-1"
-  dynamodb_table = "network-lab-terraform-locks"
-  encrypt        = true
+  bucket       = "123456789012-network-lab-tfstate"
+  key          = "network-lab/terraform.tfstate"
+  region       = "ap-south-1"
+  encrypt      = true
+  use_lockfile = true
 }
 ```
 

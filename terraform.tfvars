@@ -2,7 +2,7 @@ aws_region = "ap-south-1"
 
 # Your public IP — run: curl ifconfig.me
 # Use x.x.x.x/32 to lock SSH to just your machine
-admin_cidr = "0.0.0.0/0" # TODO: replace before applying
+admin_cidr = "115.246.211.179/32"
 
 vpc_a = {
   cidr            = "10.0.0.0/16"
