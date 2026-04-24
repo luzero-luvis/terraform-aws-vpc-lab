@@ -1,1 +1,516 @@
 # terraform-aws-vpc-lab
+
+A fully modular Terraform lab for mastering AWS VPC networking — two peered VPCs covering every core concept: IGW, NAT, route tables, NACLs, security groups, and VPC peering. Everything controlled from a single `terraform.tfvars`.
+
+---
+
+## Network Architecture
+
+```mermaid
+flowchart TB
+    Internet(["🌐 Internet"])
+
+    Internet <-->|HTTP / HTTPS| IGW_A["Internet Gateway\nvpc-a-igw"]
+    Internet <-->|HTTP / HTTPS| IGW_B["Internet Gateway\nvpc-b-igw"]
+
+    subgraph VPC_A["VPC-A — 10.0.0.0/16"]
+        subgraph PUB_A["Public Subnets"]
+            PA1["10.0.1.0/24\nap-south-1a"]
+            PA2["10.0.3.0/24\nap-south-1b"]
+        end
+        NAT["NAT Gateway\n+ Elastic IP"]
+        subgraph PRIV_A["Private Subnets"]
+            PRA1["10.0.2.0/24\nap-south-1a"]
+            PRA2["10.0.4.0/24\nap-south-1b"]
+        end
+        IGW_A --> PUB_A
+        PA1 --> NAT
+        NAT -->|"outbound only\n(no inbound)"| PRIV_A
+    end
+
+    subgraph VPC_B["VPC-B — 192.168.0.0/16"]
+        subgraph PUB_B["Public Subnet"]
+            PB1["192.168.1.0/24\nap-south-1a"]
+        end
+        subgraph PRIV_B["Private Subnet"]
+            PRB1["192.168.2.0/24\nap-south-1a"]
+        end
+        IGW_B --> PUB_B
+    end
+
+    VPC_A <-->|"VPC Peering\nroutes on both sides"| VPC_B
+```
+
+---
+
+## Traffic Flows
+
+### Public subnet — inbound + outbound via IGW
+
+```mermaid
+flowchart LR
+    Internet(["🌐 Internet"])
+    IGW["Internet Gateway"]
+    RT["Public Route Table\n0.0.0.0/0 → IGW"]
+    EC2["EC2\nPublic Subnet"]
+
+    Internet <-->|"request / response"| IGW
+    IGW <--> RT
+    RT <--> EC2
+```
+
+### Private subnet — outbound only via NAT
+
+```mermaid
+flowchart LR
+    EC2P["EC2\nPrivate Subnet"]
+    RT["Private Route Table\n0.0.0.0/0 → NAT"]
+    NAT["NAT Gateway\n(in public subnet)"]
+    IGW["Internet Gateway"]
+    Internet(["🌐 Internet"])
+
+    EC2P -->|"outbound request"| RT
+    RT --> NAT
+    NAT --> IGW
+    IGW -->|"response comes back\nto NAT, not EC2"| NAT
+    NAT -->|"forwarded back"| EC2P
+```
+
+> NAT translates the private IP to its Elastic IP on the way out, and back on the way in. The internet never sees your private EC2 IP.
+
+### VPC peering — private to private
+
+```mermaid
+flowchart LR
+    EC2_A["EC2\nVPC-A Private\n10.0.2.x"]
+    RT_A["VPC-A Private RT\n192.168.0.0/16 → Peer"]
+    PEER{{"VPC Peering\nConnection"}}
+    RT_B["VPC-B Private RT\n10.0.0.0/16 → Peer"]
+    EC2_B["EC2\nVPC-B Private\n192.168.2.x"]
+
+    EC2_A --> RT_A --> PEER --> RT_B --> EC2_B
+```
+
+> Peering alone is not enough — routes must be added on **both** route tables or traffic is dropped.
+
+---
+
+## NACL vs Security Group
+
+```mermaid
+flowchart TB
+    Internet(["🌐 Internet"])
+    NACL["NACL\n❌ Stateless\nRules evaluated on EVERY packet\nInbound AND outbound rules required"]
+    SG["Security Group\n✅ Stateful\nReturn traffic is automatic\nInbound rules only needed"]
+    EC2["EC2 Instance"]
+
+    Internet -->|"1. hits NACL first"| NACL
+    NACL -->|"2. then hits SG"| SG
+    SG -->|"3. reaches instance"| EC2
+```
+
+---
+
+## State Management
+
+```mermaid
+flowchart LR
+    Dev(["👨‍💻 Developer"])
+    TF["terraform apply"]
+    Lock["DynamoDB\nstate lock"]
+    S3["S3 Bucket\nterraform.tfstate"]
+    AWS["☁️ AWS Resources"]
+
+    Dev --> TF
+    TF -->|"1. acquire lock"| Lock
+    TF -->|"2. read current state"| S3
+    TF -->|"3. create / update / destroy"| AWS
+    TF -->|"4. write new state"| S3
+    TF -->|"5. release lock"| Lock
+```
+
+> If two people run `terraform apply` at the same time, DynamoDB blocks the second one until the first finishes.
+
+---
+
+## Folder Map
+
+```
+terraform-aws-vpc-lab/
+|
++-- [versions.tf]
+|      required_version = ">= 1.6"
+|      aws provider ~> 5.0
+|      backend "s3" {
+|        bucket         = "ACCOUNT_ID-network-lab-tfstate"
+|        key            = "network-lab/terraform.tfstate"
+|        region         = "ap-south-1"
+|        dynamodb_table = "network-lab-terraform-locks"
+|        encrypt        = true
+|      }
+|
++-- [variables.tf]
+|      var.aws_region   (default: "ap-south-1")
+|      var.admin_cidr   (no default — must be set explicitly)
+|      var.vpc_a        (cidr, public_subnets, private_subnets, azs)
+|      var.vpc_b        (cidr, public_subnets, private_subnets, azs)
+|      + validation blocks on every CIDR and subnet count
+|
++-- [terraform.tfvars]
+|      aws_region = "ap-south-1"
+|      admin_cidr = "x.x.x.x/32"        <- your IP (curl ifconfig.me)
+|      vpc_a = {
+|        cidr            = "10.0.0.0/16"
+|        public_subnets  = ["10.0.1.0/24", "10.0.3.0/24"]
+|        private_subnets = ["10.0.2.0/24", "10.0.4.0/24"]
+|        azs             = ["ap-south-1a", "ap-south-1b"]
+|      }
+|      vpc_b = {
+|        cidr            = "192.168.0.0/16"
+|        public_subnets  = ["192.168.1.0/24"]
+|        private_subnets = ["192.168.2.0/24"]
+|        azs             = ["ap-south-1a"]
+|      }
+|
++-- [main.tf]
+|      provider "aws" { region = var.aws_region }
+|      locals { common_tags = { Project, ManagedBy, Layer } }
+|      calls 14 modules:
+|        module.vpc_a            module.vpc_b
+|        module.subnets_a        module.subnets_b
+|        module.igw_a            module.igw_b
+|        module.nat_a
+|        module.vpc_peering
+|        module.route_tables_a   module.route_tables_b
+|        module.nacl_a           module.nacl_b
+|        module.sg_a             module.sg_b
+|
++-- [outputs.tf]
+|      vpc_a_id                  vpc_b_id
+|      vpc_a_public_subnet_ids   vpc_b_public_subnet_ids
+|      vpc_a_private_subnet_ids  vpc_b_private_subnet_ids
+|      peering_connection_id
+|      nat_gateway_ip
+|      vpc_a_web_sg_id           vpc_b_web_sg_id
+|      vpc_a_private_sg_id       vpc_b_private_sg_id
+|
++-- bootstrap/
+|      aws_s3_bucket              "{account_id}-network-lab-tfstate"
+|        versioning:  Enabled
+|        encryption:  AES256
+|        public_access: fully blocked
+|        lifecycle:   expire noncurrent versions after 90 days
+|      aws_dynamodb_table         "network-lab-terraform-locks"
+|        billing_mode: PAY_PER_REQUEST
+|        hash_key:     LockID (String)
+|
++-- modules/
+       |
+       +-- vpc/
+       |     aws_vpc.this
+       |     enable_dns_hostnames = true
+       |     enable_dns_support   = true
+       |
+       +-- subnets/
+       |     aws_subnet.public   (for_each keyed on CIDR string)
+       |       map_public_ip_on_launch = true
+       |     aws_subnet.private  (for_each keyed on CIDR string)
+       |
+       +-- internet_gateway/
+       |     aws_internet_gateway.this
+       |     attached to var.vpc_id
+       |
+       +-- nat_gateway/
+       |     aws_eip.nat           domain = "vpc"
+       |     aws_nat_gateway.this  placed in public_subnet_ids[0]
+       |
+       +-- route_tables/
+       |     aws_route_table.public
+       |       aws_route.public_igw      0.0.0.0/0  -> igw_id    (if set)
+       |       aws_route.public_peering  peer_cidr  -> peer conn  (if set)
+       |     aws_route_table.private
+       |       aws_route.private_nat     0.0.0.0/0  -> nat_id    (if set)
+       |       aws_route.private_peering peer_cidr  -> peer conn  (if set)
+       |     aws_route_table_association for every subnet
+       |
+       +-- nacl/
+       |     aws_network_acl.public   (stateless)
+       |       INBOUND   100 tcp :80         allow 0.0.0.0/0
+       |                 110 tcp :443        allow 0.0.0.0/0
+       |                 120 tcp :22         allow admin_cidr
+       |                 130 tcp :1024-65535 allow 0.0.0.0/0
+       |       OUTBOUND  100 tcp :80         allow 0.0.0.0/0
+       |                 110 tcp :443        allow 0.0.0.0/0
+       |                 120 tcp :1024-65535 allow 0.0.0.0/0
+       |     aws_network_acl.private  (stateless)
+       |       INBOUND   100 tcp :0-65535    allow vpc_cidr
+       |                 110 tcp :1024-65535 allow 0.0.0.0/0
+       |       OUTBOUND  100 tcp :0-65535    allow vpc_cidr
+       |                 110 tcp :443        allow 0.0.0.0/0
+       |                 120 tcp :80         allow 0.0.0.0/0
+       |
+       +-- security_groups/
+       |     aws_security_group.web      "{prefix}-web-sg"
+       |       INBOUND   tcp :80   from 0.0.0.0/0
+       |                 tcp :443  from 0.0.0.0/0
+       |                 tcp :22   from admin_cidr
+       |       OUTBOUND  all       to   0.0.0.0/0
+       |     aws_security_group.private  "{prefix}-private-sg"
+       |       INBOUND   all from web-sg (security_groups ref)
+       |                 tcp :22  from vpc_cidr
+       |       OUTBOUND  all to 0.0.0.0/0
+       |
+       +-- vpc_peering/
+             aws_vpc_peering_connection.this
+             vpc_id      = vpc_a_id  (requester)
+             peer_vpc_id = vpc_b_id  (accepter)
+             auto_accept = true      (same account + region only)
+             name        = "vpc-a-to-vpc-b"
+```
+
+---
+
+## Full Architecture Flowchart
+
+```
++-----------------------------------------------+
+|                  variables.tf                 |
+|  var.aws_region  var.admin_cidr               |
+|  var.vpc_a { cidr, subnets, azs }             |
+|  var.vpc_b { cidr, subnets, azs }             |
++-----------------------------------------------+
+                        |
+                        v
++-----------------------------------------------+
+|               terraform.tfvars                |
+|  aws_region = "ap-south-1"                    |
+|  admin_cidr = "x.x.x.x/32"                   |
+|  vpc_a.cidr = "10.0.0.0/16"                  |
+|  vpc_b.cidr = "192.168.0.0/16"               |
++-----------------------------------------------+
+                        |
+                        v
++-----------------------------------------------+
+|                   main.tf                     |
+|   provider "aws" { region = "ap-south-1" }    |
+|   calls all 14 modules + wires outputs        |
++-----------------------------------------------+
+          |                                |
+          v                                v
+
++-----------------------+      +-----------------------+
+|     module.vpc_a      |      |     module.vpc_b      |
+|  aws_vpc.this         |      |  aws_vpc.this         |
+|  cidr = 10.0.0.0/16  |      |  cidr = 192.168.0.0/16|
+|  dns_hostnames = true |      |  dns_hostnames = true |
++-----------------------+      +-----------------------+
+          |                                |
+          v                                v
++-----------------------+      +-----------------------+
+|   module.subnets_a    |      |   module.subnets_b    |
+|  PUBLIC (for_each)    |      |  PUBLIC (for_each)    |
+|   10.0.1.0/24  az1   |      |   192.168.1.0/24 az1  |
+|   10.0.3.0/24  az2   |      |                       |
+|  PRIVATE (for_each)   |      |  PRIVATE (for_each)   |
+|   10.0.2.0/24  az1   |      |   192.168.2.0/24 az1  |
+|   10.0.4.0/24  az2   |      |                       |
++-----------------------+      +-----------------------+
+          |                                |
+          v                                v
++-----------------------+      +-----------------------+
+|     module.igw_a      |      |     module.igw_b      |
+|  aws_internet_gateway |      |  aws_internet_gateway |
+|  name = "vpc-a-igw"   |      |  name = "vpc-b-igw"   |
++-----------------------+      +-----------------------+
+          |
+          v
++-----------------------+
+|     module.nat_a      |
+|  aws_eip.nat          |
+|    domain = "vpc"     |
+|  aws_nat_gateway.this |
+|    subnet = 10.0.1.0  |
+|    (public_ids[0])    |
++-----------------------+
+
+          |                                |
+          +-------------+  +--------------+
+                        |  |
+                        v  v
+          +-------------------------------+
+          |       module.vpc_peering      |
+          |  aws_vpc_peering_connection   |
+          |  vpc_a_id  <-->  vpc_b_id     |
+          |  auto_accept = true           |
+          |  name = "vpc-a-to-vpc-b"      |
+          +-------------------------------+
+          |                                |
+          v                                v
++-----------------------+      +-----------------------+
+| module.route_tables_a |      | module.route_tables_b |
+|  PUBLIC route table   |      |  PUBLIC route table   |
+|   0.0.0.0/0 -> igw_a |      |   0.0.0.0/0 -> igw_b |
+|   192.168.0.0/16->peer|      |   10.0.0.0/16  ->peer |
+|  PRIVATE route table  |      |  PRIVATE route table  |
+|   0.0.0.0/0 -> nat_a |      |   (no NAT gateway)    |
+|   192.168.0.0/16->peer|      |   10.0.0.0/16  ->peer |
++-----------------------+      +-----------------------+
+          |                                |
+          v                                v
++-----------------------+      +-----------------------+
+|     module.nacl_a     |      |     module.nacl_b     |
+|  PUBLIC nacl          |      |  PUBLIC nacl          |
+|   IN:  80,443,22,eph  |      |   IN:  80,443,22,eph  |
+|   OUT: 80,443,eph     |      |   OUT: 80,443,eph     |
+|  PRIVATE nacl         |      |  PRIVATE nacl         |
+|   IN:  vpc_cidr,eph   |      |   IN:  vpc_cidr,eph   |
+|   OUT: vpc_cidr,80,443|      |   OUT: vpc_cidr,80,443|
++-----------------------+      +-----------------------+
+          |                                |
+          v                                v
++-----------------------+      +-----------------------+
+|      module.sg_a      |      |      module.sg_b      |
+|  vpc-a-web-sg         |      |  vpc-b-web-sg         |
+|   IN:  80,443,22      |      |   IN:  80,443,22      |
+|   OUT: all            |      |   OUT: all            |
+|  vpc-a-private-sg     |      |  vpc-b-private-sg     |
+|   IN:  from web-sg    |      |   IN:  from web-sg    |
+|        22/vpc_cidr    |      |        22/vpc_cidr    |
+|   OUT: all            |      |   OUT: all            |
++-----------------------+      +-----------------------+
+          |                                |
+          +----------------+---------------+
+                           |
+                           v
+          +---------------------------------------+
+          |              outputs.tf               |
+          |  vpc_a_id               vpc_b_id      |
+          |  vpc_a_public_subnet_ids              |
+          |  vpc_a_private_subnet_ids             |
+          |  vpc_b_public_subnet_ids              |
+          |  vpc_b_private_subnet_ids             |
+          |  peering_connection_id                |
+          |  nat_gateway_ip                       |
+          |  vpc_a_web_sg_id  vpc_a_private_sg_id |
+          |  vpc_b_web_sg_id  vpc_b_private_sg_id |
+          +---------------------------------------+
+```
+
+---
+
+## Deployment
+
+### Step 1 — create the backend infrastructure (run once)
+
+```bash
+cd bootstrap/
+terraform init
+terraform apply
+# outputs: bucket name and table name to paste into versions.tf
+```
+
+### Step 2 — configure the backend
+
+Edit `versions.tf` and replace `ACCOUNT_ID` with your actual AWS account ID from the bootstrap output:
+
+```hcl
+backend "s3" {
+  bucket         = "123456789012-network-lab-tfstate"
+  key            = "network-lab/terraform.tfstate"
+  region         = "ap-south-1"
+  dynamodb_table = "network-lab-terraform-locks"
+  encrypt        = true
+}
+```
+
+### Step 3 — set your admin IP
+
+```bash
+# Find your public IP
+curl ifconfig.me
+```
+
+Update `terraform.tfvars`:
+```hcl
+admin_cidr = "203.0.113.5/32"   # your IP
+```
+
+### Step 4 — deploy
+
+```bash
+cd ..
+terraform init      # connects to S3 backend
+terraform plan      # preview what will be created
+terraform apply     # build the lab
+terraform output    # see all resource IDs
+```
+
+### Deployment flow
+
+```mermaid
+flowchart TD
+    A([Start]) --> B[cd bootstrap/\nterraform init && apply]
+    B --> C[Copy outputs into versions.tf]
+    C --> D[Set admin_cidr in terraform.tfvars]
+    D --> E[terraform init]
+    E --> F[terraform plan]
+    F --> G{Plan looks right?}
+    G -->|No| H[Fix .tf files]
+    H --> F
+    G -->|Yes| I[terraform apply]
+    I --> J[terraform output]
+    J --> K([Lab running ✅])
+```
+
+---
+
+## Learning Progression
+
+Follow these steps in order — each one teaches a distinct concept:
+
+| Step | What to do | Concept learned |
+|------|-----------|-----------------|
+| 1 | Apply VPC-A + IGW only | CIDR blocks, internet routing |
+| 2 | Add NAT Gateway | Private subnet outbound, Elastic IP |
+| 3 | Add NACLs | Stateless firewall, ephemeral ports |
+| 4 | Add Security Groups | Stateful firewall, SG vs NACL difference |
+| 5 | Apply VPC-B | Isolated network, no default connectivity |
+| 6 | Add VPC Peering | Cross-VPC routing |
+| 7 | Add peering routes on both sides | Why peering alone isn't enough |
+
+---
+
+## Key Commands
+
+```bash
+# Preview changes without applying
+terraform plan
+
+# Apply only a specific module
+terraform apply -target=module.vpc_a
+
+# See all outputs
+terraform output
+
+# Show current state
+terraform state list
+
+# Import an existing AWS resource into state
+terraform import 'module.vpc_a.aws_vpc.this' vpc-0a1b2c3d
+
+# Destroy everything (careful!)
+terraform destroy
+```
+
+---
+
+## Cost Estimate
+
+| Resource | Cost |
+|----------|------|
+| NAT Gateway | ~$45/month + data transfer |
+| Elastic IP (attached) | Free |
+| VPC Peering (same region) | Free + $0.01/GB data transfer |
+| IGW, Subnets, NACLs, SGs | Free |
+
+> Destroy the lab when not in use to avoid NAT Gateway charges: `terraform destroy`

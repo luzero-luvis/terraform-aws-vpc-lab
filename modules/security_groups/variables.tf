@@ -10,8 +10,7 @@ variable "vpc_cidr" {
 
 variable "admin_cidr" {
   type        = string
-  description = "CIDR allowed to SSH into web instances — restrict to your IP in production"
-  default     = "0.0.0.0/0"
+  description = "CIDR allowed to SSH into web instances — use your IP in x.x.x.x/32 format"
 }
 
 variable "name_prefix" {

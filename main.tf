@@ -1,13 +1,3 @@
-terraform {
-  required_version = ">= 1.6"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
 provider "aws" {
   region = var.aws_region
 }
@@ -80,6 +70,7 @@ module "nacl_a" {
   vpc_cidr           = var.vpc_a.cidr
   public_subnet_ids  = module.subnets_a.public_subnet_ids
   private_subnet_ids = module.subnets_a.private_subnet_ids
+  admin_cidr         = var.admin_cidr
   name_prefix        = "vpc-a"
   tags               = merge(local.common_tags, { VPC = "vpc-a" })
 }
@@ -88,6 +79,7 @@ module "sg_a" {
   source      = "./modules/security_groups"
   vpc_id      = module.vpc_a.vpc_id
   vpc_cidr    = var.vpc_a.cidr
+  admin_cidr  = var.admin_cidr
   name_prefix = "vpc-a"
   tags        = merge(local.common_tags, { VPC = "vpc-a" })
 }
@@ -138,6 +130,7 @@ module "nacl_b" {
   vpc_cidr           = var.vpc_b.cidr
   public_subnet_ids  = module.subnets_b.public_subnet_ids
   private_subnet_ids = module.subnets_b.private_subnet_ids
+  admin_cidr         = var.admin_cidr
   name_prefix        = "vpc-b"
   tags               = merge(local.common_tags, { VPC = "vpc-b" })
 }
@@ -146,6 +139,7 @@ module "sg_b" {
   source      = "./modules/security_groups"
   vpc_id      = module.vpc_b.vpc_id
   vpc_cidr    = var.vpc_b.cidr
+  admin_cidr  = var.admin_cidr
   name_prefix = "vpc-b"
   tags        = merge(local.common_tags, { VPC = "vpc-b" })
 }

@@ -20,8 +20,7 @@ variable "private_subnet_ids" {
 
 variable "admin_cidr" {
   type        = string
-  description = "CIDR allowed to SSH into public instances — restrict this in production"
-  default     = "0.0.0.0/0"
+  description = "CIDR allowed to SSH into public instances — use your IP in x.x.x.x/32 format"
 }
 
 variable "name_prefix" {
