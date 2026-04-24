@@ -592,6 +592,102 @@ terraform-aws-vpc-lab/
 
 ---
 
+## Why Bootstrap Exists
+
+### The chicken and egg problem
+
+Your `versions.tf` tells Terraform to store state in an S3 bucket.
+But that bucket must exist **before** `terraform init` can run.
+
+```
+terraform init needs the S3 bucket to store state
+          ↓
+S3 bucket does not exist yet
+          ↓
+who creates the S3 bucket?
+          ↓
+Terraform can create it — but Terraform needs
+the bucket first before it can run
+          ↓
+🐔 chicken needs egg
+🥚 egg needs chicken
+```
+
+Bootstrap breaks this loop. It is a **separate tiny Terraform project**
+that runs with local state (no S3 needed) and creates the bucket first.
+
+```
+STEP 1 — bootstrap runs with local state on your laptop
+──────────────────────────────────────────────────────
+cd bootstrap/
+terraform init    ← no S3 needed, state stays locally
+terraform apply   ← S3 bucket created ✅
+
+STEP 2 — now S3 exists, main project can use it
+──────────────────────────────────────────────────────
+cd ..
+terraform init    ← connects to S3 bucket ✅
+terraform apply   ← builds your whole VPC lab
+                     state stored safely in S3 ✅
+```
+
+---
+
+### Why not just click and create the bucket in AWS console?
+
+You could — but:
+
+```
+Manual console click              Bootstrap Terraform
+────────────────────              ───────────────────
+not repeatable                    run it again anytime
+easy to forget settings           versioning, encryption,
+  versioning, encryption,           public access block
+  public access block               all in code
+no record of what you did         git history shows everything
+different settings every time     same result every time
+```
+
+---
+
+### What bootstrap creates
+
+```
+aws_s3_bucket  →  {account_id}-network-lab-tfstate
+      │
+      ├── versioning        ON
+      │     keeps every old state file
+      │     roll back if something breaks
+      │
+      ├── encryption        AES256
+      │     state file contains resource IDs
+      │     must be kept private
+      │
+      ├── public access     FULLY BLOCKED
+      │     nobody on internet can see your state
+      │
+      └── lifecycle rule    expire after 90 days
+            stops S3 storage growing forever
+```
+
+No DynamoDB needed — S3 native locking handles it with `use_lockfile = true`.
+
+---
+
+### Run bootstrap only once
+
+```
+✅ Run when:    setting up this project for the first time
+
+❌ Never again: the bucket already exists
+                running twice will conflict
+
+✅ After done:  delete bootstrap/terraform.tfstate from your laptop
+                you do not need it — the bucket is already live
+```
+
+---
+
 ## Deployment
 
 ### Step 1 — create the backend infrastructure (run once)
