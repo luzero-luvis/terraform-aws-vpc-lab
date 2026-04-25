@@ -794,6 +794,115 @@ terraform destroy
 
 ---
 
+## Destroying the Lab
+
+### Step 1 — disable prevent_destroy on VPCs
+
+VPCs have `lifecycle { prevent_destroy = true }` which blocks `terraform destroy` by design.
+You must comment it out first in `modules/vpc/main.tf`:
+
+```hcl
+# modules/vpc/main.tf
+
+resource "aws_vpc" "this" {
+  cidr_block           = var.cidr_block
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  tags = merge(var.tags, { Name = var.name })
+
+  # lifecycle {       ← comment this out before destroying
+  #   prevent_destroy = true
+  # }
+}
+```
+
+### Step 2 — destroy the VPC lab
+
+```bash
+terraform destroy
+```
+
+Terraform will destroy all 38 resources — VPCs, subnets, IGWs, NAT, NACLs, SGs, peering.
+
+### Step 3 — re-enable prevent_destroy
+
+Uncomment the lifecycle block back immediately after destroy:
+
+```hcl
+  lifecycle {
+    prevent_destroy = true
+  }
+```
+
+Then commit so the protection is back in git:
+
+```bash
+git add modules/vpc/main.tf
+git commit -m "chore: re-enable prevent_destroy on VPCs after teardown"
+```
+
+---
+
+### Destroying the bootstrap S3 bucket
+
+The bootstrap bucket has **versioning enabled** — AWS will not let you delete a versioned
+bucket that still has objects in it, even if you empty it normally.
+
+You have two options:
+
+**Option A — force_destroy via Terraform (recommended)**
+
+Add `force_destroy = true` to `bootstrap/main.tf` before destroying:
+
+```hcl
+resource "aws_s3_bucket" "tfstate" {
+  bucket        = local.bucket_name
+  force_destroy = true    # ← add this line
+
+  tags = { ... }
+}
+```
+
+Then:
+
+```bash
+cd bootstrap/
+terraform apply          # updates the bucket with force_destroy = true
+terraform destroy        # now it can delete the bucket including all versions
+```
+
+**Option B — delete all versions manually via AWS CLI**
+
+```bash
+# delete all object versions
+aws s3api delete-objects \
+  --bucket 952933884165-network-lab-tfstate \
+  --delete "$(aws s3api list-object-versions \
+    --bucket 952933884165-network-lab-tfstate \
+    --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}')"
+
+# then destroy
+cd bootstrap/
+terraform destroy
+```
+
+---
+
+### Full teardown order
+
+```
+1. Comment out prevent_destroy in modules/vpc/main.tf
+2. terraform destroy                    (destroys VPC lab)
+3. Uncomment prevent_destroy back
+4. cd bootstrap/
+5. Add force_destroy = true to bucket
+6. terraform apply
+7. terraform destroy                    (destroys S3 bucket)
+```
+
+---
+
 ## Cost Estimate
 
 | Resource | Cost |
