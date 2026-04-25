@@ -97,177 +97,209 @@ flowchart LR
 
 ## Route Tables Explained
 
-Think of a route table as a **traffic police officer's rulebook**. Every packet that wants to go somewhere asks the officer which road to take. The officer checks the rulebook top to bottom and always follows the **most specific address**.
+### Two types of routes — just like the image
 
 ```
-"India"                    → too vague   (0.0.0.0/0)
-"Mumbai"                   → less vague  (10.0.0.0/16)
-"Mumbai, Andheri, Lane 5"  → very exact  (10.0.2.0/24)
+TYPE 1 — LOCAL (Directly Connected)
+  AWS adds this automatically when you create a VPC
+  "I am directly plugged into this network"
+  You never write this in Terraform — it just appears
 
-Officer always follows the most exact address first.
-```
-
----
-
-### VPC-A Public Route Table
-**Attached to:** `10.0.1.0/24` and `10.0.3.0/24`
-
-```
-┌─────────────────────────────────────────────────────┐
-│           PUBLIC ROUTE TABLE — VPC-A                │
-├──────────────────┬──────────────┬───────────────────┤
-│ WHERE YOU        │ WHICH ROAD   │ PLAIN ENGLISH      │
-│ WANT TO GO       │ TO TAKE      │                   │
-├──────────────────┼──────────────┼───────────────────┤
-│ 10.0.0.0/16      │ local        │ going to your own │
-│                  │              │ city? deliver      │
-│                  │              │ direct, no road   │
-│                  │              │ needed            │
-├──────────────────┼──────────────┼───────────────────┤
-│ 192.168.0.0/16   │ peering      │ going to VPC-B?   │
-│                  │ connection   │ use the secret    │
-│                  │              │ tunnel between    │
-│                  │              │ the two cities    │
-├──────────────────┼──────────────┼───────────────────┤
-│ 0.0.0.0/0        │ vpc-a-igw    │ going ANYWHERE    │
-│                  │              │ else on earth?    │
-│                  │              │ use the main      │
-│                  │              │ highway (IGW)     │
-│                  │              │ to internet       │
-└──────────────────┴──────────────┴───────────────────┘
-```
-
-Real example:
-```
-EC2 at 10.0.1.55 wants to reach Google (8.8.8.8)
-
-Is 8.8.8.8 inside 10.0.0.0/16?     NO
-Is 8.8.8.8 inside 192.168.0.0/16?  NO
-Is 8.8.8.8 inside 0.0.0.0/0?       YES ✅ → take IGW highway
+TYPE 2 — STATIC
+  You manually write these as aws_route resources
+  "To reach this network, send traffic this way"
+  This is everything in your modules/route_tables/main.tf
 ```
 
 ---
 
-### VPC-A Private Route Table
-**Attached to:** `10.0.2.0/24` and `10.0.4.0/24`
+### All 11 route entries across your 4 route tables
+
+Think of each table like the R1 ROUTING TABLE in the image —
+TYPE tells you who added it, DESTINATION is where the packet wants to go,
+NEXT HOP is which door to push it out of.
+
+---
+
+### Route Table 1 — VPC-A Public
+**Subnets attached:** `10.0.1.0/24` (az1) and `10.0.3.0/24` (az2)
+**Terraform resource:** `module.route_tables_a` → `aws_route_table.public`
 
 ```
-┌─────────────────────────────────────────────────────┐
-│           PRIVATE ROUTE TABLE — VPC-A               │
-├──────────────────┬──────────────┬───────────────────┤
-│ WHERE YOU        │ WHICH ROAD   │ PLAIN ENGLISH      │
-│ WANT TO GO       │ TO TAKE      │                   │
-├──────────────────┼──────────────┼───────────────────┤
-│ 10.0.0.0/16      │ local        │ going to your own │
-│                  │              │ city? deliver      │
-│                  │              │ direct            │
-├──────────────────┼──────────────┼───────────────────┤
-│ 192.168.0.0/16   │ peering      │ going to VPC-B?   │
-│                  │ connection   │ use the secret    │
-│                  │              │ tunnel            │
-├──────────────────┼──────────────┼───────────────────┤
-│ 0.0.0.0/0        │ vpc-a-nat    │ going anywhere    │
-│                  │              │ else? go to NAT   │
-│                  │              │ bodyguard — he    │
-│                  │              │ goes outside for  │
-│                  │              │ you, you stay     │
-│                  │              │ hidden inside     │
-└──────────────────┴──────────────┴───────────────────┘
+┌────────────┬────────────────────┬───────────────────────────────────┐
+│ TYPE       │ DESTINATION        │ NEXT HOP                          │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ LOCAL      │ 10.0.0.0/16        │ local                             │
+│            │                    │ AWS added this automatically       │
+│            │                    │ packets inside VPC-A stay inside  │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 0.0.0.0/0          │ vpc-a-igw                         │
+│            │                    │ aws_route.public_igw in your code │
+│            │                    │ all internet traffic exits here   │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 192.168.0.0/16     │ vpc-a-to-vpc-b (peering)          │
+│            │                    │ aws_route.public_peering          │
+│            │                    │ VPC-B traffic goes through tunnel │
+└────────────┴────────────────────┴───────────────────────────────────┘
 ```
 
-Real example:
+**Packet journey — EC2 at `10.0.1.55` pings Google `8.8.8.8`:**
 ```
-EC2 at 10.0.2.55 wants to download a package
-
-→ goes to NAT bodyguard
-→ NAT uses its Elastic IP to talk to internet
-→ reply comes back to NAT
-→ NAT forwards it back to 10.0.2.55
-
-Internet never sees 10.0.2.55 — only sees NAT's Elastic IP ✅
+Step 1: is 8.8.8.8 in 10.0.0.0/16?     NO  (not my city)
+Step 2: is 8.8.8.8 in 192.168.0.0/16?  NO  (not VPC-B)
+Step 3: is 8.8.8.8 in 0.0.0.0/0?       YES → send to IGW → internet ✅
 ```
 
 ---
 
-### VPC-B Public Route Table
-**Attached to:** `192.168.1.0/24`
+### Route Table 2 — VPC-A Private
+**Subnets attached:** `10.0.2.0/24` (az1) and `10.0.4.0/24` (az2)
+**Terraform resource:** `module.route_tables_a` → `aws_route_table.private`
 
 ```
-┌─────────────────────────────────────────────────────┐
-│           PUBLIC ROUTE TABLE — VPC-B                │
-├──────────────────┬──────────────┬───────────────────┤
-│ WHERE YOU        │ WHICH ROAD   │ PLAIN ENGLISH      │
-│ WANT TO GO       │ TO TAKE      │                   │
-├──────────────────┼──────────────┼───────────────────┤
-│ 192.168.0.0/16   │ local        │ going to your own │
-│                  │              │ city? deliver      │
-│                  │              │ direct            │
-├──────────────────┼──────────────┼───────────────────┤
-│ 10.0.0.0/16      │ peering      │ going to VPC-A?   │
-│                  │ connection   │ use the secret    │
-│                  │              │ tunnel            │
-├──────────────────┼──────────────┼───────────────────┤
-│ 0.0.0.0/0        │ vpc-b-igw    │ going anywhere    │
-│                  │              │ else? use VPC-B's │
-│                  │              │ own IGW highway   │
-└──────────────────┴──────────────┴───────────────────┘
+┌────────────┬────────────────────┬───────────────────────────────────┐
+│ TYPE       │ DESTINATION        │ NEXT HOP                          │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ LOCAL      │ 10.0.0.0/16        │ local                             │
+│            │                    │ AWS added this automatically       │
+│            │                    │ packets inside VPC-A stay inside  │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 0.0.0.0/0          │ vpc-a-nat (NAT Gateway)           │
+│            │                    │ aws_route.private_nat in your code│
+│            │                    │ NAT goes to internet FOR you      │
+│            │                    │ your private IP is never exposed  │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 192.168.0.0/16     │ vpc-a-to-vpc-b (peering)          │
+│            │                    │ aws_route.private_peering         │
+│            │                    │ VPC-B traffic goes through tunnel │
+└────────────┴────────────────────┴───────────────────────────────────┘
 ```
 
----
-
-### VPC-B Private Route Table
-**Attached to:** `192.168.2.0/24` — most restricted, no internet at all
-
+**Packet journey — EC2 at `10.0.2.55` downloads a package:**
 ```
-┌─────────────────────────────────────────────────────┐
-│           PRIVATE ROUTE TABLE — VPC-B               │
-├──────────────────┬──────────────┬───────────────────┤
-│ WHERE YOU        │ WHICH ROAD   │ PLAIN ENGLISH      │
-│ WANT TO GO       │ TO TAKE      │                   │
-├──────────────────┼──────────────┼───────────────────┤
-│ 192.168.0.0/16   │ local        │ going to your own │
-│                  │              │ city? deliver      │
-│                  │              │ direct            │
-├──────────────────┼──────────────┼───────────────────┤
-│ 10.0.0.0/16      │ peering      │ going to VPC-A?   │
-│                  │ connection   │ use the tunnel    │
-├──────────────────┼──────────────┼───────────────────┤
-│ 0.0.0.0/0        │ ❌ NO ROUTE  │ going to          │
-│                  │              │ internet? BLOCKED │
-│                  │              │ no NAT here —     │
-│                  │              │ talk to VPC-A if  │
-│                  │              │ you need internet │
-└──────────────────┴──────────────┴───────────────────┘
+Step 1: is destination in 10.0.0.0/16?     NO
+Step 2: is destination in 192.168.0.0/16?  NO
+Step 3: is destination in 0.0.0.0/0?       YES → send to NAT
+
+NAT Gateway:
+  receives packet from 10.0.2.55
+  replaces source IP with its Elastic IP (43.205.x.x)
+  sends to internet
+  gets reply back
+  forwards reply to 10.0.2.55
+
+Internet never saw 10.0.2.55 ✅
 ```
 
 ---
 
-### The big picture — all 4 route tables
+### Route Table 3 — VPC-B Public
+**Subnets attached:** `192.168.1.0/24` (az1)
+**Terraform resource:** `module.route_tables_b` → `aws_route_table.public`
 
 ```
-                    INTERNET 🌐
-                        |
-              ┌─────────┴─────────┐
-              |                   |
-           IGW-A               IGW-B
-              |                   |
-    ┌─────────┴──────┐   ┌───────┴──────────┐
-    |   VPC-A        |   |   VPC-B           |
-    |                |   |                  |
-    | PUBLIC         |   | PUBLIC           |
-    | 10.0.1.0/24   |   | 192.168.1.0/24  |
-    | 10.0.3.0/24   |   |   ↕ IGW          |
-    |   ↕ IGW       |   |                  |
-    |                |   |  (no NAT)        |
-    |    NAT 🛡️      |   |                  |
-    |     ↕          |   | PRIVATE          |
-    | PRIVATE        |   | 192.168.2.0/24  |
-    | 10.0.2.0/24   |   |   ❌ no internet  |
-    | 10.0.4.0/24   |   |                  |
-    └───────┬────────┘   └────────┬─────────┘
-            |                    |
-            └──── PEERING ───────┘
-              both can talk to each other
+┌────────────┬────────────────────┬───────────────────────────────────┐
+│ TYPE       │ DESTINATION        │ NEXT HOP                          │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ LOCAL      │ 192.168.0.0/16     │ local                             │
+│            │                    │ AWS added this automatically       │
+│            │                    │ packets inside VPC-B stay inside  │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 0.0.0.0/0          │ vpc-b-igw                         │
+│            │                    │ aws_route.public_igw              │
+│            │                    │ all internet traffic exits here   │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 10.0.0.0/16        │ vpc-a-to-vpc-b (peering)          │
+│            │                    │ aws_route.public_peering          │
+│            │                    │ VPC-A traffic goes through tunnel │
+└────────────┴────────────────────┴───────────────────────────────────┘
+```
+
+**Packet journey — EC2 at `192.168.1.10` talks to EC2 at `10.0.1.55` (VPC-A):**
+```
+Step 1: is 10.0.1.55 in 192.168.0.0/16?  NO  (different VPC)
+Step 2: is 10.0.1.55 in 0.0.0.0/0?       YES but...
+Step 3: is 10.0.1.55 in 10.0.0.0/16?     YES → more specific wins!
+        → send through peering tunnel → arrives at VPC-A ✅
+```
+
+---
+
+### Route Table 4 — VPC-B Private
+**Subnets attached:** `192.168.2.0/24` (az1)
+**Terraform resource:** `module.route_tables_b` → `aws_route_table.private`
+
+```
+┌────────────┬────────────────────┬───────────────────────────────────┐
+│ TYPE       │ DESTINATION        │ NEXT HOP                          │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ LOCAL      │ 192.168.0.0/16     │ local                             │
+│            │                    │ AWS added this automatically       │
+│            │                    │ packets inside VPC-B stay inside  │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ STATIC     │ 10.0.0.0/16        │ vpc-a-to-vpc-b (peering)          │
+│            │                    │ aws_route.private_peering         │
+│            │                    │ only way out — through VPC-A      │
+├────────────┼────────────────────┼───────────────────────────────────┤
+│ ❌ NONE    │ 0.0.0.0/0          │ NO ROUTE                          │
+│            │                    │ no NAT gateway in VPC-B           │
+│            │                    │ internet packets are DROPPED      │
+└────────────┴────────────────────┴───────────────────────────────────┘
+```
+
+**Packet journey — EC2 at `192.168.2.10` tries to reach internet:**
+```
+Step 1: is destination in 192.168.0.0/16?  NO
+Step 2: is destination in 10.0.0.0/16?     NO
+Step 3: anything else?                      NO ROUTE ❌
+
+Packet dropped. No internet for you.
+Want internet? Your only option is to talk to VPC-A
+through peering and let VPC-A's NAT handle it.
+```
+
+---
+
+### Where each route comes from in your Terraform code
+
+```
+modules/route_tables/main.tf
+│
+├── aws_route_table.public         creates the table itself
+├── aws_route_table.private        creates the table itself
+│
+├── aws_route.public_igw           STATIC: 0.0.0.0/0 → IGW
+│     count = var.create_igw_route ? 1 : 0
+│
+├── aws_route.public_peering       STATIC: peer_cidr → peering
+│     count = var.create_peering_route ? 1 : 0
+│
+├── aws_route.private_nat          STATIC: 0.0.0.0/0 → NAT
+│     count = var.create_nat_route ? 1 : 0
+│
+├── aws_route.private_peering      STATIC: peer_cidr → peering
+│     count = var.create_peering_route ? 1 : 0
+│
+└── aws_route_table_association.*  glues subnets to their table
+                                   without this, subnet uses
+                                   the VPC default route table
+```
+
+The LOCAL route is never in your code — AWS adds it automatically
+the moment you create the VPC. You cannot edit or delete it.
+
+---
+
+### The golden rule — most specific address always wins
+
+```
+Packet going to 10.0.2.55 from public subnet
+
+Matches 10.0.0.0/16  → local   (/16 more specific)
+Matches 0.0.0.0/0    → IGW     (/0  least specific)
+
+AWS picks 10.0.0.0/16 → stays inside VPC ✅
+Never goes to internet by accident
 ```
 
 ---
@@ -275,18 +307,20 @@ Internet never sees 10.0.2.55 — only sees NAT's Elastic IP ✅
 ### 3 rules to never forget
 
 ```
-1. local route ALWAYS wins
+1. LOCAL route always wins
+   AWS adds it automatically
    traffic inside the VPC never accidentally leaves
 
-2. 0.0.0.0/0 is always last resort
+2. 0.0.0.0/0 is always the last resort
    public subnet  → IGW  (direct internet)
    private subnet → NAT  (hidden internet)
    VPC-B private  → ❌   (no internet at all)
 
 3. peering needs routes on BOTH sides
-   VPC-A must know about 192.168.0.0/16 → peering
-   VPC-B must know about 10.0.0.0/16   → peering
-   one side missing = traffic dropped silently
+   VPC-A must know: 192.168.0.0/16 → peering
+   VPC-B must know: 10.0.0.0/16   → peering
+   one side missing = packet dropped silently
+   no error message — it just disappears
 ```
 
 ---
