@@ -23,7 +23,7 @@ resource "aws_security_group" "web" {
   }
 
   ingress {
-    description = "SSH — restrict to your IP in production"
+    description = "SSH - admin_cidr only"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"

@@ -11,7 +11,7 @@ resource "aws_route_table" "public" {
 
 # Default route: all internet-bound traffic exits through the IGW
 resource "aws_route" "public_igw" {
-  count = var.igw_id != null ? 1 : 0
+  count = var.create_igw_route ? 1 : 0
 
   route_table_id         = aws_route_table.public.id
   destination_cidr_block = "0.0.0.0/0"
@@ -20,7 +20,7 @@ resource "aws_route" "public_igw" {
 
 # Peering route: traffic to peer VPC CIDR goes through the peering connection
 resource "aws_route" "public_peering" {
-  count = var.peer_connection_id != null ? 1 : 0
+  count = var.create_peering_route ? 1 : 0
 
   route_table_id            = aws_route_table.public.id
   destination_cidr_block    = var.peer_cidr
@@ -47,7 +47,7 @@ resource "aws_route_table" "private" {
 
 # Default route: outbound internet traffic exits through the NAT Gateway
 resource "aws_route" "private_nat" {
-  count = var.nat_gateway_id != null ? 1 : 0
+  count = var.create_nat_route ? 1 : 0
 
   route_table_id         = aws_route_table.private.id
   destination_cidr_block = "0.0.0.0/0"
@@ -56,7 +56,7 @@ resource "aws_route" "private_nat" {
 
 # Peering route: traffic to peer VPC CIDR goes through the peering connection
 resource "aws_route" "private_peering" {
-  count = var.peer_connection_id != null ? 1 : 0
+  count = var.create_peering_route ? 1 : 0
 
   route_table_id            = aws_route_table.private.id
   destination_cidr_block    = var.peer_cidr

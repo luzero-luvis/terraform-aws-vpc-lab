@@ -10,7 +10,7 @@ terraform {
   # Run bootstrap/ first, then paste your bucket name here before terraform init.
   # bucket name pattern: {AWS_ACCOUNT_ID}-network-lab-tfstate
   backend "s3" {
-    bucket       = "ACCOUNT_ID-network-lab-tfstate" # replace ACCOUNT_ID
+    bucket       = "952933884165-network-lab-tfstate"
     key          = "network-lab/terraform.tfstate"
     region       = "ap-south-1"
     encrypt      = true

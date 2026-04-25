@@ -15,25 +15,43 @@ variable "private_subnet_ids" {
 
 variable "igw_id" {
   type        = string
-  description = "ID of the Internet Gateway — adds 0.0.0.0/0 → IGW on the public RT"
+  description = "ID of the Internet Gateway"
   default     = null
+}
+
+variable "create_igw_route" {
+  type        = bool
+  description = "Whether to add 0.0.0.0/0 → IGW route on the public route table"
+  default     = false
 }
 
 variable "nat_gateway_id" {
   type        = string
-  description = "ID of the NAT Gateway — adds 0.0.0.0/0 → NAT on the private RT"
+  description = "ID of the NAT Gateway"
   default     = null
+}
+
+variable "create_nat_route" {
+  type        = bool
+  description = "Whether to add 0.0.0.0/0 → NAT route on the private route table"
+  default     = false
 }
 
 variable "peer_connection_id" {
   type        = string
-  description = "ID of the VPC peering connection — adds a peering route on both RTs"
+  description = "ID of the VPC peering connection"
   default     = null
+}
+
+variable "create_peering_route" {
+  type        = bool
+  description = "Whether to add peer CIDR routes on both route tables"
+  default     = false
 }
 
 variable "peer_cidr" {
   type        = string
-  description = "CIDR of the peer VPC — used as the destination for peering routes"
+  description = "CIDR of the peer VPC — destination for peering routes"
   default     = null
 }
 

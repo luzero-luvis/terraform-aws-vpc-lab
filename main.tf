@@ -52,16 +52,19 @@ module "vpc_peering" {
 }
 
 module "route_tables_a" {
-  source             = "./modules/route_tables"
-  vpc_id             = module.vpc_a.vpc_id
-  public_subnet_ids  = module.subnets_a.public_subnet_ids
-  private_subnet_ids = module.subnets_a.private_subnet_ids
-  igw_id             = module.igw_a.igw_id
-  nat_gateway_id     = module.nat_a.nat_gateway_id
-  peer_connection_id = module.vpc_peering.peering_connection_id
-  peer_cidr          = var.vpc_b.cidr
-  name_prefix        = "vpc-a"
-  tags               = merge(local.common_tags, { VPC = "vpc-a" })
+  source               = "./modules/route_tables"
+  vpc_id               = module.vpc_a.vpc_id
+  public_subnet_ids    = module.subnets_a.public_subnet_ids
+  private_subnet_ids   = module.subnets_a.private_subnet_ids
+  igw_id               = module.igw_a.igw_id
+  create_igw_route     = true
+  nat_gateway_id       = module.nat_a.nat_gateway_id
+  create_nat_route     = true
+  peer_connection_id   = module.vpc_peering.peering_connection_id
+  create_peering_route = true
+  peer_cidr            = var.vpc_b.cidr
+  name_prefix          = "vpc-a"
+  tags                 = merge(local.common_tags, { VPC = "vpc-a" })
 }
 
 module "nacl_a" {
@@ -112,16 +115,18 @@ module "igw_b" {
 
 # VPC-B has no NAT gateway — private subnets reach VPC-A via peering only
 module "route_tables_b" {
-  source             = "./modules/route_tables"
-  vpc_id             = module.vpc_b.vpc_id
-  public_subnet_ids  = module.subnets_b.public_subnet_ids
-  private_subnet_ids = module.subnets_b.private_subnet_ids
-  igw_id             = module.igw_b.igw_id
-  nat_gateway_id     = null
-  peer_connection_id = module.vpc_peering.peering_connection_id
-  peer_cidr          = var.vpc_a.cidr
-  name_prefix        = "vpc-b"
-  tags               = merge(local.common_tags, { VPC = "vpc-b" })
+  source               = "./modules/route_tables"
+  vpc_id               = module.vpc_b.vpc_id
+  public_subnet_ids    = module.subnets_b.public_subnet_ids
+  private_subnet_ids   = module.subnets_b.private_subnet_ids
+  igw_id               = module.igw_b.igw_id
+  create_igw_route     = true
+  create_nat_route     = false
+  peer_connection_id   = module.vpc_peering.peering_connection_id
+  create_peering_route = true
+  peer_cidr            = var.vpc_a.cidr
+  name_prefix          = "vpc-b"
+  tags                 = merge(local.common_tags, { VPC = "vpc-b" })
 }
 
 module "nacl_b" {
