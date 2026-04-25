@@ -95,20 +95,340 @@ flowchart LR
 
 ---
 
+## Packet Flow Diagrams
+
+Think of packets like letters in the postal system. Each route table is a post office — it checks the destination address and decides where to forward the letter next.
+
+---
+
+### Full network diagram — every device with its interface
+
+Every box below shows the device name, its interface (like eth0 from PowerCert),
+and the IP address bound to that interface.
+
+```
+                                   🌐 INTERNET
+                                         │
+                    ┌────────────────────┴─────────────────────┐
+                    │                                           │
+             [igw-vpc-a]                                 [igw-vpc-b]
+             Internet Gateway                            Internet Gateway
+                    │                                           │
+ ┌──────────────────┴─────────────────────────┐   ┌────────────┴──────────────────────────┐
+ │  VPC-A   10.0.0.0/16                        │   │  VPC-B   192.168.0.0/16               │
+ │                                             │   │                                        │
+ │  ┌──────────────────────────────────────┐   │   │  ┌──────────────────────────────────┐  │
+ │  │  PUBLIC SUBNETS                      │   │   │  │  PUBLIC SUBNET                   │  │
+ │  │                                      │   │   │  │  192.168.1.0/24  (ap-south-1a)   │  │
+ │  │  ┌────────────────────────────────┐  │   │   │  │  ┌────────────────────────────┐  │  │
+ │  │  │  10.0.1.0/24  (ap-south-1a)    │  │   │   │  │  │ [EC2]                      │  │  │
+ │  │  │  ┌──────────────────────────┐  │  │   │   │  │  │  eth0: 192.168.1.x         │  │  │
+ │  │  │  │ [EC2]                    │  │  │   │   │  │  │  + public EIP (via igw-b)  │  │  │
+ │  │  │  │  eth0: 10.0.1.55         │  │  │   │   │  │  └────────────────────────────┘  │  │
+ │  │  │  │  + public EIP (via igw-a)│  │  │   │   │  └──────────────────────────────────┘  │
+ │  │  │  └──────────────────────────┘  │  │   │   │                                        │
+ │  │  │  ┌──────────────────────────┐  │  │   │   │  ┌──────────────────────────────────┐  │
+ │  │  │  │ [NAT GW]                 │  │  │   │   │  │  PRIVATE SUBNET                  │  │
+ │  │  │  │  eth0: 10.0.1.x          │  │  │   │   │  │  192.168.2.0/24  (ap-south-1a)   │  │
+ │  │  │  │  EIP:  43.205.x.x        │  │  │   │   │  │  ┌────────────────────────────┐  │  │
+ │  │  │  └──────────────────────────┘  │  │   │   │  │  │ [EC2]                      │  │  │
+ │  │  └────────────────────────────────┘  │   │   │  │  │  eth0: 192.168.2.x         │  │  │
+ │  │                                      │   │   │  │  │  ❌ no public IP            │  │  │
+ │  │  ┌────────────────────────────────┐  │   │   │  │  │  ❌ no internet access     │  │  │
+ │  │  │  10.0.3.0/24  (ap-south-1b)    │  │   │   │  │  └────────────────────────────┘  │  │
+ │  │  │  ┌──────────────────────────┐  │  │   │   │  └──────────────────────────────────┘  │
+ │  │  │  │ [EC2]                    │  │  │   │   └────────────────────────────────────────┘
+ │  │  │  │  eth0: 10.0.3.x          │  │  │   │
+ │  │  │  │  + public EIP (via igw-a)│  │  │   │
+ │  │  │  └──────────────────────────┘  │  │   │
+ │  │  └────────────────────────────────┘  │   │
+ │  └──────────────────────────────────────┘   │
+ │                      ▲                      │
+ │                      │ outbound only        │
+ │  ┌───────────────────┴──────────────────┐   │
+ │  │  PRIVATE SUBNETS                     │   │
+ │  │                                      │   │
+ │  │  ┌────────────────────────────────┐  │   │
+ │  │  │  10.0.2.0/24  (ap-south-1a)    │  │   │
+ │  │  │  ┌──────────────────────────┐  │  │   │
+ │  │  │  │ [EC2]                    │  │  │   │
+ │  │  │  │  eth0: 10.0.2.55         │  │  │   │
+ │  │  │  │  ❌ no public IP         │  │  │   │
+ │  │  │  └──────────────────────────┘  │  │   │
+ │  │  └────────────────────────────────┘  │   │
+ │  │  ┌────────────────────────────────┐  │   │
+ │  │  │  10.0.4.0/24  (ap-south-1b)    │  │   │
+ │  │  │  ┌──────────────────────────┐  │  │   │
+ │  │  │  │ [EC2]                    │  │  │   │
+ │  │  │  │  eth0: 10.0.4.x          │  │  │   │
+ │  │  │  │  ❌ no public IP         │  │  │   │
+ │  │  │  └──────────────────────────┘  │  │   │
+ │  │  └────────────────────────────────┘  │   │
+ │  └──────────────────────────────────────┘   │
+ └─────────────────────────────────────────────┘
+                    │                                           │
+                    └──────────── pcx-vpc-a-to-b ───────────────┘
+                          VPC Peering Connection  (virtual — no eth0)
+                          10.0.0.0/16  ◄──►  192.168.0.0/16
+                          routes needed on BOTH sides
+```
+
+---
+
+### Scenario A — Public EC2 reaches the internet
+
+```
+   ┌───────────────────────────────────────────────────────────┐
+   │  [EC2]  eth0: 10.0.1.55  (VPC-A Public, 10.0.1.0/24)     │
+   │  packet: src=10.0.1.55  dst=8.8.8.8 (Google DNS)         │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ① packet leaves eth0
+                              ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  ROUTE TABLE — VPC-A Public                               │
+   │                                                           │
+   │  TYPE           NETWORK           INTERFACE               │
+   │  ─────────────────────────────────────────────            │
+   │  DIR.CONNECTED  10.0.0.0/16       local                   │
+   │                 8.8.8.8 here? NO                          │
+   │                                                           │
+   │  STATIC         192.168.0.0/16    pcx-vpc-a-to-b          │
+   │                 8.8.8.8 here? NO                          │
+   │                                                           │
+   │  STATIC         0.0.0.0/0         igw-vpc-a  ✅            │
+   │                 catch-all — 8.8.8.8 matches              │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ② exit via INTERFACE: igw-vpc-a
+                              ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  [igw-vpc-a]  Internet Gateway                            │
+   │  maps EC2 eth0 private IP → public Elastic IP            │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ③ exits to internet
+                              ▼
+                       🌐 8.8.8.8 ✅
+
+   Return trip (automatic):
+   8.8.8.8 → reply to public EIP → igw-vpc-a maps back → eth0: 10.0.1.55
+```
+
+---
+
+### Scenario B — Private EC2 downloads from the internet via NAT
+
+Private EC2 (10.0.2.55) has **no public IP**. It cannot go directly to the internet.
+NAT Gateway is the middleman — it goes to the internet on the EC2's behalf.
+
+```
+   ┌───────────────────────────────────────────────────────────┐
+   │  [EC2]  eth0: 10.0.2.55  (VPC-A Private, 10.0.2.0/24)    │
+   │  packet: src=10.0.2.55  dst=8.8.8.8                      │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ① packet leaves eth0
+                              ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  ROUTE TABLE — VPC-A Private                              │
+   │                                                           │
+   │  TYPE           NETWORK           INTERFACE               │
+   │  ─────────────────────────────────────────────            │
+   │  DIR.CONNECTED  10.0.0.0/16       local        NO match   │
+   │  STATIC         192.168.0.0/16    pcx-a-to-b   NO match   │
+   │  STATIC         0.0.0.0/0         nat-vpc-a  ✅ matched    │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ② exit via INTERFACE: nat-vpc-a
+                              ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  [NAT GW]  eth0: 10.0.1.x  (sits in public 10.0.1.0/24)  │
+   │            EIP:  43.205.x.x                               │
+   │                                                           │
+   │  src: eth0 10.0.2.55 ──────────────────────────►         │
+   │                              replaced with                │
+   │  src: EIP  43.205.x.x  (internet sees this only)         │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ③ NAT now uses public RT: 0.0.0.0/0 → igw-vpc-a
+                              ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  [igw-vpc-a]  Internet Gateway                            │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ④ exits to internet
+                              ▼
+                       🌐 8.8.8.8 ✅
+
+   Return trip:
+   8.8.8.8 → reply to 43.205.x.x (EIP) → [NAT GW] receives it
+   → NAT translates back to eth0: 10.0.2.55 → EC2 gets the response
+
+   The internet never learned that 10.0.2.55 exists.
+```
+
+---
+
+### Scenario C — EC2 in VPC-A talks to EC2 in VPC-B
+
+This is VPC Peering. Packets travel through the AWS backbone — no internet involved.
+Both VPCs must have routes pointing at each other or packets are silently dropped.
+
+```
+  VPC-A (10.0.0.0/16)                                    VPC-B (192.168.0.0/16)
+
+  ┌──────────────────────────────┐                       ┌──────────────────────────────┐
+  │ [EC2]  eth0: 10.0.2.55       │  ─── ① send ───────►  │ [EC2]  eth0: 192.168.2.10    │
+  │ packet dst: 192.168.2.10     │                       │ ⑤ ✅ packet received          │
+  └──────────────┬───────────────┘                       └──────────────────────────────┘
+                 │                                                      ▲
+                 │ ② route table lookup                                 │
+                 ▼                                        ④ DIR.CONNECTED matches
+  ┌────────────────────────────────────────┐               192.168.2.10 is inside
+  │  ROUTE TABLE — VPC-A Private           │               192.168.0.0/16 → delivered!
+  │                                        │                             │
+  │  TYPE          NETWORK        INTERFACE│     ┌───────────────────────┴──────────────┐
+  │  ──────────────────────────────────── │     │  ROUTE TABLE — VPC-B Private          │
+  │  DIR.CONNECTED 10.0.0.0/16    local   │     │                                       │
+  │                192.168.2.10 here? NO  │     │  TYPE          NETWORK      INTERFACE  │
+  │                                        │     │  ─────────────────────────────────── │
+  │  STATIC        0.0.0.0/0      nat-a   │     │  DIR.CONNECTED 192.168.0.0/16 local   │
+  │                /0 — least specific    │     │              192.168.2.10? YES ✅      │
+  │                                        │     │                                       │
+  │  STATIC        192.168.0.0/16 pcx ✅  │     │  STATIC        10.0.0.0/16  pcx-a-to-b│
+  │                /16 beats /0           │     └───────────────────────────────────────┘
+  │                most specific wins!    │                             ▲
+  └──────────────────┬─────────────────────┘                            │
+                     │                                                   │
+                     │ ③ exit via INTERFACE: pcx-vpc-a-to-b             │
+                     └────────────── VPC PEERING CONNECTION ─────────────┘
+                                          vpc-a-to-vpc-b
+```
+
+What happens if VPC-B is missing the return route:
+
+```
+  [EC2] eth0: 192.168.2.10  tries to reply to 10.0.2.55
+
+  ROUTE TABLE — VPC-B Private:
+    DIR.CONNECTED  192.168.0.0/16  local       — 10.0.2.55 in here? NO
+    (no STATIC route for 10.0.0.0/16)          — NO MATCH
+
+  → PACKET DROPPED ❌
+  Connection just times out. No error. No warning. It just hangs.
+```
+
+---
+
+### Scenario D — VPC-B Private tries to reach the internet (blocked)
+
+VPC-B has no NAT Gateway. The private subnet has no path out.
+
+```
+   ┌───────────────────────────────────────────────────────────┐
+   │  [EC2]  eth0: 192.168.2.x  (VPC-B Private, 192.168.2.0/24)│
+   │  packet: src=192.168.2.x  dst=8.8.8.8                    │
+   └──────────────────────────┬────────────────────────────────┘
+                              │
+                              │ ① packet leaves eth0
+                              ▼
+   ┌───────────────────────────────────────────────────────────┐
+   │  ROUTE TABLE — VPC-B Private                              │
+   │                                                           │
+   │  TYPE           NETWORK           INTERFACE               │
+   │  ─────────────────────────────────────────────            │
+   │  DIR.CONNECTED  192.168.0.0/16    local        NO match   │
+   │  STATIC         10.0.0.0/16       pcx-a-to-b   NO match   │
+   │  (no 0.0.0.0/0 entry — no NAT gateway in VPC-B)          │
+   └───────────────────────────────────────────────────────────┘
+                         │
+                         │ ② no matching route found
+                         ▼
+
+              ❌ PACKET DROPPED — no internet for you
+
+   To fix this, you have two options:
+
+   Option 1 — Add a NAT Gateway inside VPC-B (same as VPC-A does)
+              Cost: ~$45/month extra
+
+   Option 2 — Chain through VPC-A's NAT (advanced learning exercise)
+              VPC-B private → peering → VPC-A → NAT → internet
+              Requires: 0.0.0.0/0 → peering in VPC-B private RT
+```
+
+---
+
 ## Route Tables Explained
 
 ### Two types of routes — just like the image
 
 ```
-TYPE 1 — LOCAL (Directly Connected)
+TYPE 1 — DIR. CONNECTED  (PowerCert name) / LOCAL  (AWS name)
   AWS adds this automatically when you create a VPC
   "I am directly plugged into this network"
   You never write this in Terraform — it just appears
+  INTERFACE = local  (traffic stays inside the VPC, no exit door)
 
 TYPE 2 — STATIC
   You manually write these as aws_route resources
   "To reach this network, send traffic this way"
   This is everything in your modules/route_tables/main.tf
+  INTERFACE = igw-vpc-a  /  nat-vpc-a  /  pcx-a-to-b  (the exit door)
+```
+
+---
+
+### Network interfaces in this lab
+
+Just like the PowerCert image shows Eth0/Eth1/Eth2 on the router with their IP labels,
+every device in this lab has a named network interface. These names appear in the
+INTERFACE column of every route table below.
+
+```
+DEVICE                       INTERFACE      IP / ROLE
+──────────────────────────────────────────────────────────────────────────────
+EC2 (VPC-A public)           eth0           10.0.1.55  +  public EIP via IGW
+EC2 (VPC-A private)          eth0           10.0.2.55  (private only — no EIP)
+NAT Gateway (VPC-A)          eth0           10.0.1.x  (private in public subnet)
+                                             EIP: 43.205.x.x  (public-facing)
+Internet Gateway (VPC-A)     igw-vpc-a      bridges VPC-A ↔ internet
+VPC Peering Connection       pcx-a-to-b     bridges VPC-A ↔ VPC-B  (no IP)
+Internet Gateway (VPC-B)     igw-vpc-b      bridges VPC-B ↔ internet
+EC2 (VPC-B public)           eth0           192.168.1.x  +  public EIP via IGW
+EC2 (VPC-B private)          eth0           192.168.2.x  (private only — no EIP)
+```
+
+Topology with eth0 labels (like the PowerCert diagram):
+
+```
+                          🌐 INTERNET
+                                │
+               ┌────────────────┴──────────────────┐
+               │                                   │
+          [igw-vpc-a]                         [igw-vpc-b]
+               │                                   │
+  ┌────────────┴───────────────────┐  ┌────────────┴───────────────────┐
+  │  VPC-A  10.0.0.0/16            │  │  VPC-B  192.168.0.0/16         │
+  │                                 │  │                                │
+  │  PUBLIC  10.0.1.0/24            │  │  PUBLIC  192.168.1.0/24        │
+  │  ┌──────────────────────────┐   │  │  ┌─────────────────────────┐  │
+  │  │ EC2    eth0: 10.0.1.55   │   │  │  │ EC2  eth0: 192.168.1.x  │  │
+  │  ├──────────────────────────┤   │  │  └─────────────────────────┘  │
+  │  │ NAT GW  eth0: 10.0.1.x   │   │  │                                │
+  │  │         EIP: 43.205.x.x  │   │  │  PRIVATE  192.168.2.0/24      │
+  │  └──────────────────────────┘   │  │  ┌─────────────────────────┐  │
+  │               ▲                 │  │  │ EC2  eth0: 192.168.2.x  │  │
+  │               │ outbound only   │  │  └─────────────────────────┘  │
+  │  PRIVATE  10.0.2.0/24           │  └────────────────────────────────┘
+  │  ┌──────────────────────────┐   │
+  │  │ EC2    eth0: 10.0.2.55   │   │
+  │  └──────────────────────────┘   │
+  └─────────────────────────────────┘
+               │                                   │
+               └──────────── pcx-vpc-a-to-b ────────┘
+                        VPC Peering  (virtual — no eth0)
 ```
 
 ---
@@ -116,8 +436,8 @@ TYPE 2 — STATIC
 ### All 11 route entries across your 4 route tables
 
 Think of each table like the R1 ROUTING TABLE in the image —
-TYPE tells you who added it, DESTINATION is where the packet wants to go,
-NEXT HOP is which door to push it out of.
+TYPE tells you who added it, NETWORK is the destination CIDR,
+INTERFACE is which exit door the packet uses (igw, nat, pcx, or local).
 
 ---
 
@@ -126,28 +446,28 @@ NEXT HOP is which door to push it out of.
 **Terraform resource:** `module.route_tables_a` → `aws_route_table.public`
 
 ```
-┌────────────┬────────────────────┬───────────────────────────────────┐
-│ TYPE       │ DESTINATION        │ NEXT HOP                          │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ LOCAL      │ 10.0.0.0/16        │ local                             │
-│            │                    │ AWS added this automatically       │
-│            │                    │ packets inside VPC-A stay inside  │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 0.0.0.0/0          │ vpc-a-igw                         │
-│            │                    │ aws_route.public_igw in your code │
-│            │                    │ all internet traffic exits here   │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 192.168.0.0/16     │ vpc-a-to-vpc-b (peering)          │
-│            │                    │ aws_route.public_peering          │
-│            │                    │ VPC-B traffic goes through tunnel │
-└────────────┴────────────────────┴───────────────────────────────────┘
+┌─────────────────┬────────────────────┬──────────────────────────────────┐
+│ TYPE            │ NETWORK            │ INTERFACE                        │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ DIR. CONNECTED  │ 10.0.0.0/16        │ local                            │
+│                 │                    │ VPC-A itself — auto-added by AWS │
+│                 │                    │ traffic stays inside VPC         │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 0.0.0.0/0          │ igw-vpc-a                        │
+│                 │                    │ Internet Gateway                 │
+│                 │                    │ aws_route.public_igw             │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 192.168.0.0/16     │ pcx-vpc-a-to-b                   │
+│                 │                    │ VPC Peering Connection           │
+│                 │                    │ aws_route.public_peering         │
+└─────────────────┴────────────────────┴──────────────────────────────────┘
 ```
 
-**Packet journey — EC2 at `10.0.1.55` pings Google `8.8.8.8`:**
+**Packet journey — EC2 (eth0: 10.0.1.55) pings Google 8.8.8.8:**
 ```
-Step 1: is 8.8.8.8 in 10.0.0.0/16?     NO  (not my city)
-Step 2: is 8.8.8.8 in 192.168.0.0/16?  NO  (not VPC-B)
-Step 3: is 8.8.8.8 in 0.0.0.0/0?       YES → send to IGW → internet ✅
+Step 1: is 8.8.8.8 in 10.0.0.0/16?     NO  (not inside VPC-A)
+Step 2: is 8.8.8.8 in 192.168.0.0/16?  NO  (not inside VPC-B)
+Step 3: is 8.8.8.8 in 0.0.0.0/0?       YES → INTERFACE: igw-vpc-a → internet ✅
 ```
 
 ---
@@ -157,36 +477,36 @@ Step 3: is 8.8.8.8 in 0.0.0.0/0?       YES → send to IGW → internet ✅
 **Terraform resource:** `module.route_tables_a` → `aws_route_table.private`
 
 ```
-┌────────────┬────────────────────┬───────────────────────────────────┐
-│ TYPE       │ DESTINATION        │ NEXT HOP                          │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ LOCAL      │ 10.0.0.0/16        │ local                             │
-│            │                    │ AWS added this automatically       │
-│            │                    │ packets inside VPC-A stay inside  │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 0.0.0.0/0          │ vpc-a-nat (NAT Gateway)           │
-│            │                    │ aws_route.private_nat in your code│
-│            │                    │ NAT goes to internet FOR you      │
-│            │                    │ your private IP is never exposed  │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 192.168.0.0/16     │ vpc-a-to-vpc-b (peering)          │
-│            │                    │ aws_route.private_peering         │
-│            │                    │ VPC-B traffic goes through tunnel │
-└────────────┴────────────────────┴───────────────────────────────────┘
+┌─────────────────┬────────────────────┬──────────────────────────────────┐
+│ TYPE            │ NETWORK            │ INTERFACE                        │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ DIR. CONNECTED  │ 10.0.0.0/16        │ local                            │
+│                 │                    │ VPC-A itself — auto-added by AWS │
+│                 │                    │ traffic stays inside VPC         │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 0.0.0.0/0          │ nat-vpc-a                        │
+│                 │                    │ NAT Gateway  (eth0: 10.0.1.x)    │
+│                 │                    │ aws_route.private_nat            │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 192.168.0.0/16     │ pcx-vpc-a-to-b                   │
+│                 │                    │ VPC Peering Connection           │
+│                 │                    │ aws_route.private_peering        │
+└─────────────────┴────────────────────┴──────────────────────────────────┘
 ```
 
-**Packet journey — EC2 at `10.0.2.55` downloads a package:**
+**Packet journey — EC2 (eth0: 10.0.2.55) downloads a package:**
 ```
 Step 1: is destination in 10.0.0.0/16?     NO
 Step 2: is destination in 192.168.0.0/16?  NO
-Step 3: is destination in 0.0.0.0/0?       YES → send to NAT
+Step 3: is destination in 0.0.0.0/0?       YES → INTERFACE: nat-vpc-a
 
-NAT Gateway:
-  receives packet from 10.0.2.55
+NAT Gateway (eth0: 10.0.1.x):
+  receives packet from EC2 eth0 10.0.2.55
   replaces source IP with its Elastic IP (43.205.x.x)
-  sends to internet
+  sends outbound via igw-vpc-a
   gets reply back
-  forwards reply to 10.0.2.55
+  translates EIP back to 10.0.2.55
+  forwards to EC2 eth0
 
 Internet never saw 10.0.2.55 ✅
 ```
@@ -198,29 +518,29 @@ Internet never saw 10.0.2.55 ✅
 **Terraform resource:** `module.route_tables_b` → `aws_route_table.public`
 
 ```
-┌────────────┬────────────────────┬───────────────────────────────────┐
-│ TYPE       │ DESTINATION        │ NEXT HOP                          │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ LOCAL      │ 192.168.0.0/16     │ local                             │
-│            │                    │ AWS added this automatically       │
-│            │                    │ packets inside VPC-B stay inside  │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 0.0.0.0/0          │ vpc-b-igw                         │
-│            │                    │ aws_route.public_igw              │
-│            │                    │ all internet traffic exits here   │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 10.0.0.0/16        │ vpc-a-to-vpc-b (peering)          │
-│            │                    │ aws_route.public_peering          │
-│            │                    │ VPC-A traffic goes through tunnel │
-└────────────┴────────────────────┴───────────────────────────────────┘
+┌─────────────────┬────────────────────┬──────────────────────────────────┐
+│ TYPE            │ NETWORK            │ INTERFACE                        │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ DIR. CONNECTED  │ 192.168.0.0/16     │ local                            │
+│                 │                    │ VPC-B itself — auto-added by AWS │
+│                 │                    │ traffic stays inside VPC         │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 0.0.0.0/0          │ igw-vpc-b                        │
+│                 │                    │ Internet Gateway                 │
+│                 │                    │ aws_route.public_igw             │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 10.0.0.0/16        │ pcx-vpc-a-to-b                   │
+│                 │                    │ VPC Peering Connection           │
+│                 │                    │ aws_route.public_peering         │
+└─────────────────┴────────────────────┴──────────────────────────────────┘
 ```
 
-**Packet journey — EC2 at `192.168.1.10` talks to EC2 at `10.0.1.55` (VPC-A):**
+**Packet journey — EC2 (eth0: 192.168.1.10) talks to EC2 (eth0: 10.0.1.55) in VPC-A:**
 ```
 Step 1: is 10.0.1.55 in 192.168.0.0/16?  NO  (different VPC)
 Step 2: is 10.0.1.55 in 0.0.0.0/0?       YES but...
-Step 3: is 10.0.1.55 in 10.0.0.0/16?     YES → more specific wins!
-        → send through peering tunnel → arrives at VPC-A ✅
+Step 3: is 10.0.1.55 in 10.0.0.0/16?     YES → more specific /16 wins!
+        → INTERFACE: pcx-vpc-a-to-b → arrives at VPC-A ✅
 ```
 
 ---
@@ -230,21 +550,21 @@ Step 3: is 10.0.1.55 in 10.0.0.0/16?     YES → more specific wins!
 **Terraform resource:** `module.route_tables_b` → `aws_route_table.private`
 
 ```
-┌────────────┬────────────────────┬───────────────────────────────────┐
-│ TYPE       │ DESTINATION        │ NEXT HOP                          │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ LOCAL      │ 192.168.0.0/16     │ local                             │
-│            │                    │ AWS added this automatically       │
-│            │                    │ packets inside VPC-B stay inside  │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ STATIC     │ 10.0.0.0/16        │ vpc-a-to-vpc-b (peering)          │
-│            │                    │ aws_route.private_peering         │
-│            │                    │ only way out — through VPC-A      │
-├────────────┼────────────────────┼───────────────────────────────────┤
-│ ❌ NONE    │ 0.0.0.0/0          │ NO ROUTE                          │
-│            │                    │ no NAT gateway in VPC-B           │
-│            │                    │ internet packets are DROPPED      │
-└────────────┴────────────────────┴───────────────────────────────────┘
+┌─────────────────┬────────────────────┬──────────────────────────────────┐
+│ TYPE            │ NETWORK            │ INTERFACE                        │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ DIR. CONNECTED  │ 192.168.0.0/16     │ local                            │
+│                 │                    │ VPC-B itself — auto-added by AWS │
+│                 │                    │ traffic stays inside VPC         │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ STATIC          │ 10.0.0.0/16        │ pcx-vpc-a-to-b                   │
+│                 │                    │ VPC Peering Connection           │
+│                 │                    │ aws_route.private_peering        │
+├─────────────────┼────────────────────┼──────────────────────────────────┤
+│ ❌ MISSING      │ 0.0.0.0/0          │ NO INTERFACE                     │
+│                 │                    │ no NAT gateway in VPC-B          │
+│                 │                    │ internet packets are DROPPED     │
+└─────────────────┴────────────────────┴──────────────────────────────────┘
 ```
 
 **Packet journey — EC2 at `192.168.2.10` tries to reach internet:**
